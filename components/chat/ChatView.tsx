@@ -294,6 +294,7 @@ export function ChatView() {
                 childId={activeChildId}
                 conversationId={activeConversationId}
                 childName={activeChild?.name}
+                dateOfBirth={activeChild?.date_of_birth}
                 onConversationId={setActiveConversationId}
                 onRefreshConversations={refreshConversations}
                 onRegisterChild={() => setRegisterOpen(true)}

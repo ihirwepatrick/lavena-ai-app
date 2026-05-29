@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { ArrowUp } from "lucide-react";
+import { ArrowUp, LayoutGrid } from "lucide-react";
 import { KeyboardEvent, useRef, useEffect } from "react";
 
 interface ChatComposerProps {
@@ -13,6 +13,8 @@ interface ChatComposerProps {
   disabled?: boolean;
   placeholder?: string;
   variant?: "home" | "dock";
+  onOpenPresets?: () => void;
+  showPresetsButton?: boolean;
 }
 
 export function ChatComposer({
@@ -22,6 +24,8 @@ export function ChatComposer({
   disabled,
   placeholder = "Message Lavena AI…",
   variant = "dock",
+  onOpenPresets,
+  showPresetsButton,
 }: ChatComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -55,6 +59,22 @@ export function ChatComposer({
             : "max-w-3xl",
         )}
       >
+        {showPresetsButton && onOpenPresets && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onOpenPresets}
+            disabled={disabled}
+            aria-label="Open quick prompts"
+            className={cn(
+              "mb-0.5 shrink-0 rounded-full text-muted-foreground",
+              isHome ? "h-9 w-9" : "h-10 w-10",
+            )}
+          >
+            <LayoutGrid className="h-4 w-4" />
+          </Button>
+        )}
         <Textarea
           ref={ref}
           value={value}

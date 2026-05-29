@@ -3,6 +3,7 @@
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatHome } from "@/components/chat/ChatHome";
 import { MessageList } from "@/components/chat/MessageList";
+import { PresetDrawer } from "@/components/chat/PresetDrawer";
 import { formatAIError } from "@/lib/ai/errors";
 import type { ChatMessage } from "@/lib/types";
 import { useChat } from "@ai-sdk/react";
@@ -23,6 +24,7 @@ interface ChatThreadProps {
   childId: string;
   conversationId: string | null;
   childName?: string;
+  dateOfBirth?: string;
   onConversationId: (id: string) => void;
   onRefreshConversations: () => void;
   onRegisterChild: () => void;
@@ -35,12 +37,14 @@ export function ChatThread({
   childId,
   conversationId,
   childName,
+  dateOfBirth,
   onConversationId,
   onRefreshConversations,
   onRegisterChild,
   onStreamActivityChange,
 }: ChatThreadProps) {
   const [input, setInput] = useState("");
+  const [presetsOpen, setPresetsOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const conversationIdRef = useRef(conversationId);
   const pendingConversationIdRef = useRef<string | null>(null);
@@ -138,12 +142,15 @@ export function ChatThread({
       {isHomeView ? (
         <ChatHome
           childName={childName}
+          childId={childId}
+          dateOfBirth={dateOfBirth}
           hasChild={!!childId}
           input={input}
           onInputChange={setInput}
           onSend={() => handleSend()}
           onSuggestedPrompt={(p) => handleSend(p)}
           onRegisterChild={onRegisterChild}
+          onOpenPresets={() => setPresetsOpen(true)}
           disabled={isBusy}
         />
       ) : (
@@ -155,9 +162,18 @@ export function ChatThread({
             onChange={setInput}
             onSend={() => handleSend()}
             disabled={isBusy}
+            showPresetsButton
+            onOpenPresets={() => setPresetsOpen(true)}
           />
         </>
       )}
+
+      <PresetDrawer
+        open={presetsOpen}
+        onClose={() => setPresetsOpen(false)}
+        onSelect={(p) => handleSend(p)}
+        disabled={isBusy}
+      />
     </>
   );
 }
