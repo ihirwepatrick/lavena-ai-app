@@ -1,11 +1,9 @@
+import { computeAgeWeeks } from "@/lib/children/age";
+import {
+  getAgeNutritionGuide,
+  getWeeklyMealSchedule,
+} from "@/lib/nutrition/guide";
 import type { SupabaseClient } from "@supabase/supabase-js";
-
-function computeAgeWeeks(dateOfBirth: string): number {
-  const dob = new Date(dateOfBirth);
-  const now = new Date();
-  const diffMs = now.getTime() - dob.getTime();
-  return Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000));
-}
 
 function formatAge(dateOfBirth: string): string {
   const weeks = computeAgeWeeks(dateOfBirth);
@@ -159,6 +157,24 @@ export async function buildChildContext(
             `- ${g.recorded_at}: ${g.weight_kg ? `${g.weight_kg} kg` : ""}${g.height_cm ? `, ${g.height_cm} cm` : ""}`.trim(),
         )
       : ["- No growth records"]),
+    "",
+    "## Nutrition guidance (age-based reference)",
+    ...(() => {
+      const guide = getAgeNutritionGuide(ageWeeks);
+      const meals = getWeeklyMealSchedule(ageWeeks);
+      return [
+        `- Stage: ${guide.label}`,
+        `- Summary: ${guide.summary}`,
+        `- Focus nutrients: ${guide.focusNutrients.join("; ")}`,
+        `- Foods to offer: ${guide.foodsToIntroduce.join("; ")}`,
+        `- Limit or avoid: ${guide.avoid.join("; ")}`,
+        "- Weekly meal template (Mon–Sun):",
+        ...meals.map(
+          (d) =>
+            `  - ${d.day}: breakfast ${d.breakfast}; lunch ${d.lunch}; dinner ${d.dinner}; snack ${d.snack}`,
+        ),
+      ];
+    })(),
   ];
 
   return sections.join("\n");

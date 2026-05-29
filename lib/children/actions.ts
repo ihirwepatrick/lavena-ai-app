@@ -54,54 +54,5 @@ export async function createChildProfile(
   return data as Child;
 }
 
-export async function fetchChildNotifications(childId: string) {
-  const supabase = createClient();
-
-  const { data: child } = await supabase
-    .from("children")
-    .select("name, date_of_birth")
-    .eq("id", childId)
-    .single();
-
-  if (!child) return [];
-
-  const ageWeeks = Math.floor(
-    (Date.now() - new Date(child.date_of_birth).getTime()) /
-      (7 * 24 * 60 * 60 * 1000),
-  );
-
-  const [{ data: vaccines }, { data: schedule }] = await Promise.all([
-    supabase
-      .from("vaccine_records")
-      .select("vaccine_name")
-      .eq("child_id", childId),
-    supabase
-      .from("local_vaccine_schedule")
-      .select("vaccine_name, due_at_weeks, notes")
-      .eq("region", "US")
-      .order("due_at_weeks", { ascending: true }),
-  ]);
-
-  const administered = new Set(
-    (vaccines ?? []).map((v) =>
-      v.vaccine_name.toLowerCase().split("(")[0].trim(),
-    ),
-  );
-
-  const upcoming = (schedule ?? [])
-    .filter((item) => {
-      if (item.due_at_weeks < ageWeeks) return false;
-      const base = item.vaccine_name.toLowerCase().split("(")[0].trim();
-      return ![...administered].some(
-        (a) => a.includes(base) || base.includes(a),
-      );
-    })
-    .slice(0, 5);
-
-  return upcoming.map((item) => ({
-    id: `${item.vaccine_name}-${item.due_at_weeks}`,
-    title: `${item.vaccine_name} due`,
-    body: item.notes ?? `Due around week ${item.due_at_weeks}`,
-    childName: child.name,
-  }));
-}
+export { fetchChildNotifications, fetchChildReminders } from "./reminders";
+export type { ChildReminder, ReminderUrgency } from "./reminders";
