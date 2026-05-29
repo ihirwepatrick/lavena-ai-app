@@ -2,7 +2,10 @@
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getAuthCallbackUrl } from "@/lib/auth/get-redirect-url";
+import {
+  getAuthCallbackUrl,
+  getAuthConfirmUrl,
+} from "@/lib/auth/get-redirect-url";
 import { createClient } from "@/lib/supabase/client";
 import { useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useState } from "react";
@@ -68,7 +71,7 @@ function LoginForm() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: getAuthCallbackUrl(redirect),
+        emailRedirectTo: getAuthConfirmUrl(redirect),
       },
     });
 

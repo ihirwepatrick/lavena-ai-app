@@ -25,9 +25,15 @@ export async function updateSession(request: NextRequest) {
     },
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  let user = null;
+  try {
+    const {
+      data: { user: authUser },
+    } = await supabase.auth.getUser();
+    user = authUser;
+  } catch {
+    // Network failure talking to Supabase Auth — treat as signed out
+  }
 
   return { supabaseResponse, user };
 }

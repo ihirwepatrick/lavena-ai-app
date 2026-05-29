@@ -180,7 +180,7 @@ The reference app lives in this repository (Next.js + Supabase + OpenRouter).
 1. Copy `.env.local.example` → `.env.local` and set keys.
 2. Apply `supabase/migrations/001_initial.sql` (hosted SQL editor or `supabase db reset` locally).
 3. Enable Supabase **Google** OAuth (and optionally **Email** for magic links). See [README.md](../README.md).
-4. Set **Site URL** and **Redirect URLs** to include `/auth/callback`.
+4. Set **Site URL** and **Redirect URLs** to include `/auth/callback**` and `/auth/confirm**`. Configure the Magic Link email template to use `/auth/confirm` (see README).
 5. `npm install && npm run dev` → [http://localhost:3000/login](http://localhost:3000/login)
 
 See [README.md](../README.md) for full setup.
@@ -190,10 +190,13 @@ See [README.md](../README.md) for full setup.
 | Path | Role |
 |------|------|
 | `app/login/page.tsx` | Google OAuth + email sign-in |
-| `app/auth/callback/route.ts` | Session exchange after OAuth / magic link |
-| `app/api/chat/route.ts` | Streams OpenRouter; injects child context; persists messages |
+| `app/auth/callback/page.tsx` | Client PKCE exchange after Google OAuth |
+| `app/auth/confirm/route.ts` | Server email confirm via `token_hash` (cross-device) |
+| `app/api/chat/route.ts` | AI SDK `streamText` + OpenRouter; persists messages |
+| `lib/ai/openrouter.ts` | OpenRouter provider + model fallback (max 3 models) |
 | `lib/context/buildChildContext.ts` | Loads DB facts into system prompt |
-| `lib/openrouter.ts` | OpenRouter streaming client |
+| `lib/supabase/query.ts` | Client queries with session refresh + retry |
+| `components/chat/AssistantMessage.tsx` | Markdown + streaming tail fade |
 | `components/chat/*` | ChatGPT-style UI (sidebar, messages, composer) |
 | `supabase/migrations/001_initial.sql` | Schema, RLS, vaccine schedule seed |
 
@@ -208,7 +211,7 @@ See [README.md](../README.md) for full setup.
 
 ```env
 OPENROUTER_API_KEY=
-OPENROUTER_MODEL=deepseek/deepseek-v4-flash:free
+OPENROUTER_MODEL=openrouter/free
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=

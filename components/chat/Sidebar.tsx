@@ -3,6 +3,7 @@
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { ConnectionBannerKind } from "@/components/chat/ConnectionBanner";
 import type { Child, Conversation } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { LogOut, MessageSquarePlus, X } from "lucide-react";
@@ -16,6 +17,11 @@ interface SidebarProps {
   onNewChat: () => void;
   onSignOut: () => void;
   loading?: boolean;
+  conversationsError?: {
+    kind: ConnectionBannerKind;
+    message: string;
+  } | null;
+  onRetryConversations?: () => void;
   className?: string;
   onClose?: () => void;
 }
@@ -29,6 +35,8 @@ export function Sidebar({
   onNewChat,
   onSignOut,
   loading,
+  conversationsError,
+  onRetryConversations,
   className,
   onClose,
 }: SidebarProps) {
@@ -84,6 +92,21 @@ export function Sidebar({
           <div className="space-y-2 px-2 py-2">
             <Skeleton className="h-8 w-full" />
             <Skeleton className="h-8 w-full" />
+          </div>
+        ) : conversationsError ? (
+          <div className="space-y-2 px-2 py-2">
+            <p className="text-xs text-red-600 dark:text-red-400">
+              {conversationsError.message}
+            </p>
+            {onRetryConversations && (
+              <button
+                type="button"
+                onClick={onRetryConversations}
+                className="text-xs font-medium text-foreground underline"
+              >
+                Retry
+              </button>
+            )}
           </div>
         ) : conversations.length === 0 ? (
           <p className="px-2 py-4 text-sm text-muted-foreground">

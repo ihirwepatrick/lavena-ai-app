@@ -1,5 +1,6 @@
 "use client";
 
+import type { ConnectionBannerKind } from "@/components/chat/ConnectionBanner";
 import type { Child, Conversation } from "@/lib/types";
 import { Menu, MessageSquarePlus } from "lucide-react";
 import { useState } from "react";
@@ -18,6 +19,11 @@ interface AppShellProps {
   onRegisterChild: () => void;
   onSignOut: () => void;
   sidebarLoading?: boolean;
+  conversationsError?: {
+    kind: ConnectionBannerKind;
+    message: string;
+  } | null;
+  onRetryConversations?: () => void;
   main: React.ReactNode;
 }
 
@@ -32,6 +38,8 @@ export function AppShell({
   onRegisterChild,
   onSignOut,
   sidebarLoading,
+  conversationsError,
+  onRetryConversations,
   main,
 }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -48,6 +56,8 @@ export function AppShell({
           onNewChat={onNewChat}
           onSignOut={onSignOut}
           loading={sidebarLoading}
+          conversationsError={conversationsError}
+          onRetryConversations={onRetryConversations}
         />
       </div>
 
@@ -68,6 +78,8 @@ export function AppShell({
               onNewChat={onNewChat}
               onSignOut={onSignOut}
               loading={sidebarLoading}
+              conversationsError={conversationsError}
+              onRetryConversations={onRetryConversations}
               onClose={() => setMobileOpen(false)}
             />
           </div>

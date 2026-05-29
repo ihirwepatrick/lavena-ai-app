@@ -95,6 +95,29 @@ button:disabled {
   animation: fade-in 0.25s ease-out;
 }
 
+.stream-tail {
+  animation: stream-tail-fade 0.45s ease-out;
+}
+
+.assistant-prose strong {
+  font-weight: 600;
+}
+
+.assistant-prose a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+@keyframes stream-tail-fade {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 @keyframes blink {
   0%,
   100% {

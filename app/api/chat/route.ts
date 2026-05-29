@@ -1,11 +1,17 @@
 import { getAuthUserId } from "@/lib/auth/get-user";
+import { getChatModel } from "@/lib/ai/openrouter";
+import { formatAIError, getTextFromUIMessage } from "@/lib/ai/errors";
 import { buildChildContext } from "@/lib/context/buildChildContext";
-import { streamChatCompletion, type ChatCompletionMessage } from "@/lib/openrouter";
 import { createClient } from "@/lib/supabase/server";
+import {
+  convertToModelMessages,
+  streamText,
+  type UIMessage,
+} from "ai";
 import { NextResponse } from "next/server";
 
 interface ChatRequestBody {
-  message: string;
+  messages: UIMessage[];
   childId: string;
   conversationId?: string;
 }
@@ -25,6 +31,28 @@ async function verifyChildOwnership(
   return !error && !!data;
 }
 
+async function persistUserMessage(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  conversationId: string,
+  content: string,
+) {
+  const { data: last } = await supabase
+    .from("messages")
+    .select("role, content")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (last?.role === "user" && last.content === content) return;
+
+  await supabase.from("messages").insert({
+    conversation_id: conversationId,
+    role: "user",
+    content,
+  });
+}
+
 export async function POST(request: Request) {
   const userId = await getAuthUserId();
   if (!userId) {
@@ -38,12 +66,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { message, childId, conversationId } = body;
-  if (!message?.trim() || !childId) {
+  const { messages, childId, conversationId } = body;
+  if (!messages?.length || !childId) {
     return NextResponse.json(
-      { error: "message and childId are required" },
+      { error: "messages and childId are required" },
       { status: 400 },
     );
+  }
+
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  const lastUserText = lastUser ? getTextFromUIMessage(lastUser).trim() : "";
+
+  if (!lastUserText) {
+    return NextResponse.json({ error: "Missing user message" }, { status: 400 });
   }
 
   const supabase = await createClient();
@@ -56,7 +91,7 @@ export async function POST(request: Request) {
 
   if (!activeConversationId) {
     const title =
-      message.trim().slice(0, 40) + (message.trim().length > 40 ? "…" : "");
+      lastUserText.slice(0, 40) + (lastUserText.length > 40 ? "…" : "");
     const { data: conv, error: convError } = await supabase
       .from("conversations")
       .insert({
@@ -87,134 +122,67 @@ export async function POST(request: Request) {
     }
   }
 
-  await supabase.from("messages").insert({
-    conversation_id: activeConversationId,
-    role: "user",
-    content: message.trim(),
-  });
+  if (!activeConversationId) {
+    return NextResponse.json(
+      { error: "Could not resolve conversation" },
+      { status: 500 },
+    );
+  }
 
-  const { data: history } = await supabase
-    .from("messages")
-    .select("role, content")
-    .eq("conversation_id", activeConversationId)
-    .order("created_at", { ascending: true })
-    .limit(30);
+  await persistUserMessage(supabase, activeConversationId, lastUserText);
 
   let systemContent: string;
   try {
     systemContent = await buildChildContext(supabase, childId);
   } catch {
-    return NextResponse.json({ error: "Child context unavailable" }, { status: 404 });
-  }
-
-  const chatMessages: ChatCompletionMessage[] = [
-    { role: "system", content: systemContent },
-    ...(history ?? [])
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      })),
-  ];
-
-  let openRouterResponse: Response;
-  try {
-    openRouterResponse = await streamChatCompletion(chatMessages);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "OpenRouter error";
-    return NextResponse.json({ error: msg }, { status: 500 });
-  }
-
-  if (!openRouterResponse.ok || !openRouterResponse.body) {
-    const errText = await openRouterResponse.text();
     return NextResponse.json(
-      { error: errText || "OpenRouter request failed" },
-      { status: openRouterResponse.status },
+      { error: "Child context unavailable" },
+      { status: 404 },
     );
   }
 
   const convId = activeConversationId;
-  const encoder = new TextEncoder();
-  let fullAssistant = "";
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      const sendMeta = () => {
-        controller.enqueue(
-          encoder.encode(
-            `event: meta\ndata: ${JSON.stringify({ conversationId: convId })}\n\n`,
-          ),
-        );
-      };
-      sendMeta();
+  try {
+    const result = streamText({
+      model: getChatModel(),
+      system: systemContent,
+      messages: await convertToModelMessages(messages),
+      maxRetries: 1,
+    });
 
-      const reader = openRouterResponse.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
+    return result.toUIMessageStreamResponse({
+      headers: {
+        "X-Conversation-Id": convId,
+      },
+      onFinish: async ({ responseMessage, isAborted }) => {
+        const text = getTextFromUIMessage(responseMessage).trim();
+        if (isAborted || !text) return;
+        await supabase.from("messages").insert({
+          conversation_id: convId,
+          role: "assistant",
+          content: text,
+        });
+      },
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: formatAIError(error) },
+      { status: APICallErrorStatus(error) },
+    );
+  }
+}
 
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
-            const payload = trimmed.slice(5).trim();
-            if (payload === "[DONE]") continue;
-
-            try {
-              const parsed = JSON.parse(payload) as {
-                choices?: { delta?: { content?: string } }[];
-              };
-              const token = parsed.choices?.[0]?.delta?.content;
-              if (token) {
-                fullAssistant += token;
-                controller.enqueue(
-                  encoder.encode(
-                    `event: token\ndata: ${JSON.stringify({ content: token })}\n\n`,
-                  ),
-                );
-              }
-            } catch {
-              // skip malformed chunks
-            }
-          }
-        }
-
-        if (fullAssistant.trim()) {
-          await supabase.from("messages").insert({
-            conversation_id: convId,
-            role: "assistant",
-            content: fullAssistant.trim(),
-          });
-        }
-
-        controller.enqueue(
-          encoder.encode(`event: done\ndata: ${JSON.stringify({ conversationId: convId })}\n\n`),
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Stream error";
-        controller.enqueue(
-          encoder.encode(
-            `event: error\ndata: ${JSON.stringify({ error: msg })}\n\n`,
-          ),
-        );
-      } finally {
-        controller.close();
-      }
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
+function APICallErrorStatus(error: unknown): number {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "statusCode" in error &&
+    typeof (error as { statusCode: number }).statusCode === "number"
+  ) {
+    const code = (error as { statusCode: number }).statusCode;
+    if (code === 429) return 429;
+    if (code >= 400 && code < 600) return code;
+  }
+  return 500;
 }

@@ -2,157 +2,227 @@
 
 import { RegisterChildDialog } from "@/components/child/RegisterChildDialog";
 import { AppShell } from "@/components/chat/AppShell";
-import { ChatComposer } from "@/components/chat/ChatComposer";
+import { ChatThread } from "@/components/chat/ChatThread";
 import { ChatHome } from "@/components/chat/ChatHome";
-import { MessageList } from "@/components/chat/MessageList";
+import {
+  ConnectionBanner,
+  type ConnectionBannerKind,
+} from "@/components/chat/ConnectionBanner";
 import { createClient } from "@/lib/supabase/client";
+import {
+  SupabaseAuthError,
+  SupabaseNetworkError,
+  withSupabaseQuery,
+} from "@/lib/supabase/query";
 import type { ChatMessage, Child, Conversation } from "@/lib/types";
-import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-function parseSSEChunk(
-  buffer: string,
-  onToken: (content: string) => void,
-  onMeta: (conversationId: string) => void,
-  onError: (error: string) => void,
-): string {
-  const parts = buffer.split("\n\n");
-  const remainder = parts.pop() ?? "";
+function newSessionKey(): string {
+  return crypto.randomUUID();
+}
 
-  for (const part of parts) {
-    const lines = part.split("\n");
-    let event = "message";
-    let data = "";
-
-    for (const line of lines) {
-      if (line.startsWith("event:")) event = line.slice(6).trim();
-      if (line.startsWith("data:")) data = line.slice(5).trim();
-    }
-
-    if (!data) continue;
-
-    try {
-      const parsed = JSON.parse(data) as Record<string, string>;
-      if (event === "token" && parsed.content) onToken(parsed.content);
-      if (event === "meta" && parsed.conversationId)
-        onMeta(parsed.conversationId);
-      if (event === "error" && parsed.error) onError(parsed.error);
-    } catch {
-      // ignore
-    }
+function mapLoadError(err: unknown): {
+  kind: ConnectionBannerKind;
+  message: string;
+} {
+  if (err instanceof SupabaseAuthError) {
+    return { kind: "auth", message: err.message };
   }
-
-  return remainder;
+  if (err instanceof SupabaseNetworkError) {
+    return { kind: "network", message: err.message };
+  }
+  return {
+    kind: "generic",
+    message: err instanceof Error ? err.message : "Failed to load",
+  };
 }
 
 export function ChatView() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [childList, setChildList] = useState<Child[]>([]);
   const [activeChildId, setActiveChildId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversationsLoading, setConversationsLoading] = useState(false);
+  const [conversationsError, setConversationsError] = useState<{
+    kind: ConnectionBannerKind;
+    message: string;
+  } | null>(null);
   const [activeConversationId, setActiveConversationId] = useState<
     string | null
   >(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [sessionKey, setSessionKey] = useState(newSessionKey);
+  const [loadedMessages, setLoadedMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{
+    kind: ConnectionBannerKind;
+    message: string;
+  } | null>(null);
   const [registerOpen, setRegisterOpen] = useState(false);
+  const [isThreadStreaming, setIsThreadStreaming] = useState(false);
+  const initRef = useRef(false);
 
   const activeChild = childList.find((c) => c.id === activeChildId);
-  const isHomeView = messages.length === 0 && !isStreaming;
+  const threadKey = `${activeChildId ?? "none"}-${sessionKey}`;
 
   const loadChildren = useCallback(async () => {
-    const supabase = createClient();
-    const { data, error: err } = await supabase
-      .from("children")
-      .select("id, name, date_of_birth")
-      .order("created_at", { ascending: true });
-
-    if (err) throw new Error(err.message);
-    return data as Child[];
+    return withSupabaseQuery(async (supabase) => {
+      const { data, error: err } = await supabase
+        .from("children")
+        .select("id, name, date_of_birth")
+        .order("created_at", { ascending: true });
+      return { data: (data ?? []) as Child[], error: err };
+    });
   }, []);
 
   const loadConversations = useCallback(async (childId: string) => {
-    const supabase = createClient();
-    const { data, error: err } = await supabase
-      .from("conversations")
-      .select("id, title, child_id, created_at")
-      .eq("child_id", childId)
-      .order("created_at", { ascending: false })
-      .limit(30);
-
-    if (err) throw new Error(err.message);
-    return data as Conversation[];
+    return withSupabaseQuery(async (supabase) => {
+      const { data, error: err } = await supabase
+        .from("conversations")
+        .select("id, title, child_id, created_at")
+        .eq("child_id", childId)
+        .order("created_at", { ascending: false })
+        .limit(30);
+      return { data: (data ?? []) as Conversation[], error: err };
+    });
   }, []);
 
   const loadMessages = useCallback(async (conversationId: string) => {
-    const supabase = createClient();
-    const { data, error: err } = await supabase
-      .from("messages")
-      .select("id, role, content, created_at")
-      .eq("conversation_id", conversationId)
-      .in("role", ["user", "assistant"])
-      .order("created_at", { ascending: true });
-
-    if (err) throw new Error(err.message);
-    return (data ?? []) as ChatMessage[];
+    return withSupabaseQuery(async (supabase) => {
+      const { data, error: err } = await supabase
+        .from("messages")
+        .select("id, role, content, created_at")
+        .eq("conversation_id", conversationId)
+        .in("role", ["user", "assistant"])
+        .order("created_at", { ascending: true });
+      return { data: (data ?? []) as ChatMessage[], error: err };
+    });
   }, []);
 
   useEffect(() => {
-    async function init() {
-      setLoading(true);
-      setError(null);
-      try {
-        const kids = await loadChildren();
-        setChildList(kids);
-        const firstId = kids[0]?.id ?? null;
-        setActiveChildId(firstId);
-
-        if (firstId) {
-          const convs = await loadConversations(firstId);
-          setConversations(convs);
-        }
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to load");
-      } finally {
-        setLoading(false);
-      }
+    const authError = searchParams.get("error");
+    const reason = searchParams.get("reason");
+    if (authError === "auth") {
+      const q = reason
+        ? `?error=auth&reason=${encodeURIComponent(reason)}`
+        : "?error=auth";
+      router.replace(`/login${q}`);
     }
-    init();
-  }, [loadChildren, loadConversations]);
+  }, [searchParams, router]);
+
+  useEffect(() => {
+    const supabase = createClient();
+
+    async function ensureSession() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) {
+        router.replace("/login?redirect=/chat");
+        return false;
+      }
+      return true;
+    }
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        router.replace("/login?redirect=/chat");
+      }
+    });
+
+    ensureSession();
+
+    return () => subscription.unsubscribe();
+  }, [router]);
+
+  const fetchConversations = useCallback(
+    async (childId: string) => {
+      setConversationsLoading(true);
+      setConversationsError(null);
+      try {
+        const convs = await loadConversations(childId);
+        setConversations(convs);
+      } catch (e) {
+        const mapped = mapLoadError(e);
+        setConversationsError(mapped);
+        if (mapped.kind !== "network") {
+          setConversations([]);
+        }
+      } finally {
+        setConversationsLoading(false);
+      }
+    },
+    [loadConversations],
+  );
+
+  const runInit = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const kids = await loadChildren();
+      setChildList(kids);
+      const firstId = kids[0]?.id ?? null;
+      setActiveChildId(firstId);
+      if (firstId) {
+        await fetchConversations(firstId);
+      }
+    } catch (e) {
+      setError(mapLoadError(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [loadChildren, fetchConversations]);
+
+  useEffect(() => {
+    if (initRef.current) return;
+    initRef.current = true;
+    runInit();
+  }, [runInit]);
 
   useEffect(() => {
     if (!activeChildId) {
       setConversations([]);
       return;
     }
-    loadConversations(activeChildId)
-      .then(setConversations)
-      .catch(() => setConversations([]));
-  }, [activeChildId, loadConversations]);
+    fetchConversations(activeChildId);
+  }, [activeChildId, fetchConversations]);
 
   useEffect(() => {
-    if (!activeConversationId) {
-      setMessages([]);
+    if (!activeConversationId || isThreadStreaming) {
+      if (!activeConversationId) {
+        setLoadedMessages([]);
+      }
       return;
     }
     loadMessages(activeConversationId)
-      .then(setMessages)
-      .catch(() => setMessages([]));
-  }, [activeConversationId, loadMessages]);
+      .then(setLoadedMessages)
+      .catch((e) => {
+        setError(mapLoadError(e));
+        setLoadedMessages([]);
+      });
+  }, [activeConversationId, loadMessages, isThreadStreaming]);
 
   function handleChildSelect(childId: string) {
     setActiveChildId(childId);
     setActiveConversationId(null);
-    setMessages([]);
-    setInput("");
+    setSessionKey(newSessionKey());
+    setLoadedMessages([]);
     setError(null);
   }
 
   function handleNewChat() {
     setActiveConversationId(null);
-    setMessages([]);
-    setInput("");
+    setSessionKey(newSessionKey());
+    setLoadedMessages([]);
+    setError(null);
+  }
+
+  function handleConversationSelect(id: string) {
+    setActiveConversationId(id);
+    setSessionKey(id);
     setError(null);
   }
 
@@ -167,93 +237,15 @@ export function ChatView() {
     }
   }
 
-  async function handleSend(text?: string) {
-    const content = (text ?? input).trim();
-    if (!content || !activeChildId || isStreaming) return;
-
-    setInput("");
-    setError(null);
-    setIsStreaming(true);
-
-    const userMsg: ChatMessage = {
-      id: `temp-user-${Date.now()}`,
-      role: "user",
-      content,
-    };
-    const assistantId = `temp-assistant-${Date.now()}`;
-    const assistantMsg: ChatMessage = {
-      id: assistantId,
-      role: "assistant",
-      content: "",
-    };
-
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
-
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: content,
-          childId: activeChildId,
-          conversationId: activeConversationId ?? undefined,
-        }),
-      });
-
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({}));
-        throw new Error(
-          (errBody as { error?: string }).error ?? "Chat request failed",
-        );
-      }
-
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No response stream");
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let newConvId = activeConversationId;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        buffer = parseSSEChunk(
-          buffer,
-          (token) => {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, content: m.content + token }
-                  : m,
-              ),
-            );
-          },
-          (conversationId) => {
-            newConvId = conversationId;
-            setActiveConversationId(conversationId);
-          },
-          (err) => setError(err),
-        );
-      }
-
-      if (newConvId && activeChildId) {
-        const convs = await loadConversations(activeChildId);
-        setConversations(convs);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
-      setMessages((prev) => prev.filter((m) => m.id !== assistantId));
-    } finally {
-      setIsStreaming(false);
-    }
-  }
-
   async function handleSignOut() {
     await createClient().auth.signOut();
     window.location.href = "/login";
   }
+
+  const refreshConversations = useCallback(() => {
+    if (!activeChildId) return;
+    fetchConversations(activeChildId);
+  }, [activeChildId, fetchConversations]);
 
   if (loading) {
     return (
@@ -271,43 +263,52 @@ export function ChatView() {
         onChildSelect={handleChildSelect}
         conversations={conversations}
         activeConversationId={activeConversationId}
-        onConversationSelect={setActiveConversationId}
+        onConversationSelect={handleConversationSelect}
         onNewChat={handleNewChat}
         onRegisterChild={() => setRegisterOpen(true)}
         onSignOut={handleSignOut}
-        sidebarLoading={loading}
+        sidebarLoading={loading || conversationsLoading}
+        conversationsError={conversationsError}
+        onRetryConversations={
+          activeChildId
+            ? () => fetchConversations(activeChildId)
+            : undefined
+        }
         main={
           <>
             {error && (
-              <div className="mx-auto max-w-3xl px-4 pt-3">
-                <p className="rounded-lg border border-border bg-muted px-3 py-2 text-center text-sm text-red-600 dark:text-red-400">
-                  {error}
-                </p>
-              </div>
+              <ConnectionBanner
+                kind={error.kind}
+                message={error.message}
+                onRetry={
+                  error.kind === "network" ? () => runInit() : undefined
+                }
+              />
             )}
 
-            {isHomeView ? (
-              <ChatHome
+            {activeChildId ? (
+              <ChatThread
+                key={threadKey}
+                threadKey={threadKey}
+                initialMessages={loadedMessages}
+                childId={activeChildId}
+                conversationId={activeConversationId}
                 childName={activeChild?.name}
-                hasChild={!!activeChildId}
-                input={input}
-                onInputChange={setInput}
-                onSend={() => handleSend()}
-                onSuggestedPrompt={(p) => handleSend(p)}
+                onConversationId={setActiveConversationId}
+                onRefreshConversations={refreshConversations}
                 onRegisterChild={() => setRegisterOpen(true)}
-                disabled={isStreaming}
+                onStreamActivityChange={setIsThreadStreaming}
               />
             ) : (
-              <>
-                <MessageList messages={messages} isStreaming={isStreaming} />
-                <ChatComposer
-                  variant="dock"
-                  value={input}
-                  onChange={setInput}
-                  onSend={() => handleSend()}
-                  disabled={isStreaming || !activeChildId}
-                />
-              </>
+              <ChatHome
+                hasChild={false}
+                input=""
+                onInputChange={() => {}}
+                onSend={() => {}}
+                onSuggestedPrompt={() => {}}
+                onRegisterChild={() => setRegisterOpen(true)}
+                disabled
+              />
             )}
           </>
         }
